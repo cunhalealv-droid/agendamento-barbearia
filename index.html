@@ -1,0 +1,767 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { Scissors, Calendar, Clock, User, Phone, CheckCircle, Menu, X, LogOut, Star, Check, Trash2 } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+
+// --- FIREBASE INITIALIZATION ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : null;
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'guh-barber-default';
+
+// --- DEFAULT DATA ---
+const DEFAULT_SERVICES = [
+  { id: 's1', name: 'Corte Social', price: 20, type: 'service' },
+  { id: 's2', name: 'Degradê', price: 35, type: 'service' },
+  { id: 's3', name: 'Barba', price: 20, type: 'service' },
+  { id: 's4', name: 'Sobrancelha', price: 25, type: 'service' }
+];
+
+const DEFAULT_COMBOS = [
+  { id: 'c1', name: 'Degradê + Sobrancelha', price: 50, type: 'combo' },
+  { id: 'c2', name: 'Degradê + Barba', price: 50, type: 'combo' },
+  { id: 'c3', name: 'Degradê + Barba + Sobrancelha', price: 60, type: 'combo' },
+  { id: 'c4', name: 'Social + Barba', price: 30, type: 'combo' }
+];
+
+const PLANS = [
+  { id: 'p1', name: 'Plano Social', desc: '1 corte social por semana', price: 120, highlight: false },
+  { id: 'p2', name: 'Social + Sobrancelha', desc: '1 corte social + sobrancelha por semana', price: 160, highlight: false },
+  { id: 'p3', name: 'Degradê + Barba', desc: '1 degradê + barba por semana', price: 190, highlight: false },
+  { id: 'p4', name: 'Plano Completo', desc: '1 degradê + barba + sobrancelha por semana', price: 230, highlight: true }
+];
+
+const WHATSAPP_NUMBER = "5511977591352";
+const ADMIN_PIN = "GUH2024";
+
+// --- UTILS ---
+const GOLD = "#D4AF37";
+const TIME_SLOTS = [
+  "09:00", "10:00", "11:00", "12:00", 
+  "13:00", "14:00", "15:00", "16:00", 
+  "17:00", "18:00"
+];
+
+export default function GuhBarberApp() {
+  const [user, setUser] = useState(null);
+  const [view, setView] = useState('home'); // 'home', 'admin'
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  
+  // Data State
+  const [bookings, setBookings] = useState([]);
+  const [services, setServices] = useState([...DEFAULT_SERVICES, ...DEFAULT_COMBOS]);
+  const [loadingData, setLoadingData] = useState(true);
+
+  // --- AUTHENTICATION ---
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
+    };
+    initAuth();
+    
+    const unsubscribe = onAuthStateChanged(auth, (usr) => {
+      setUser(usr);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- DATA FETCHING ---
+  useEffect(() => {
+    if (!user || !db) {
+      setLoadingData(false);
+      return;
+    }
+
+    // Fetch Bookings (Rule 1 & 2: Simple path, no complex queries)
+    const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
+    const unsubBookings = onSnapshot(bookingsRef, (snap) => {
+      const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setBookings(data);
+      setLoadingData(false);
+    }, (err) => {
+      console.error("Bookings fetch error:", err);
+      setLoadingData(false);
+    });
+
+    // Fetch Custom Services (Optional: If added by admin)
+    const servicesRef = collection(db, 'artifacts', appId, 'public', 'data', 'services');
+    const unsubServices = onSnapshot(servicesRef, (snap) => {
+      if (!snap.empty) {
+        const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setServices(data);
+      }
+    }, (err) => {
+      console.error("Services fetch error:", err);
+    });
+
+    return () => {
+      unsubBookings();
+      unsubServices();
+    };
+  }, [user]);
+
+  const scrollTo = (id) => {
+    setIsMenuOpen(false);
+    if (view !== 'home') setView('home');
+    setTimeout(() => {
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
+  const openWhatsApp = (text) => {
+    const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  };
+
+  if (!user && view === 'admin') {
+    return <div className="min-h-screen bg-black text-white flex items-center justify-center">Conectando...</div>;
+  }
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] text-gray-200 font-sans selection:bg-[#D4AF37] selection:text-black">
+      {/* Navigation */}
+      <nav className="fixed w-full z-50 bg-black/90 backdrop-blur-md border-b border-[#D4AF37]/20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-20">
+            <div className="flex-shrink-0 flex items-center cursor-pointer" onClick={() => scrollTo('home')}>
+              <h1 className="text-2xl font-bold tracking-widest text-white uppercase">
+                GUH <span className="text-[#D4AF37]">BARBER</span>
+              </h1>
+            </div>
+            
+            {/* Desktop Menu */}
+            <div className="hidden md:flex items-center space-x-8">
+              {view === 'home' ? (
+                <>
+                  <button onClick={() => scrollTo('services')} className="hover:text-[#D4AF37] transition-colors uppercase text-sm font-medium tracking-wide">Serviços</button>
+                  <button onClick={() => scrollTo('combos')} className="hover:text-[#D4AF37] transition-colors uppercase text-sm font-medium tracking-wide">Combos</button>
+                  <button onClick={() => scrollTo('plans')} className="hover:text-[#D4AF37] transition-colors uppercase text-sm font-medium tracking-wide">Planos</button>
+                  <button onClick={() => scrollTo('booking')} className="bg-[#D4AF37] text-black px-6 py-2 rounded-sm font-bold uppercase tracking-wide hover:bg-yellow-500 transition-all">Agendar</button>
+                  <button onClick={() => setView('admin')} className="text-gray-500 hover:text-white transition-colors"><User size={20} /></button>
+                </>
+              ) : (
+                <button onClick={() => { setView('home'); setIsAdmin(false); }} className="flex items-center space-x-2 hover:text-[#D4AF37] transition-colors uppercase text-sm font-medium tracking-wide">
+                  <LogOut size={18} /> <span>Sair do Painel</span>
+                </button>
+              )}
+            </div>
+
+            {/* Mobile Menu Button */}
+            <div className="md:hidden flex items-center">
+              <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="text-[#D4AF37]">
+                {isMenuOpen ? <X size={28} /> : <Menu size={28} />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Mobile Menu */}
+        {isMenuOpen && (
+          <div className="md:hidden bg-[#111] border-b border-[#D4AF37]/20">
+            <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3 flex flex-col">
+              {view === 'home' ? (
+                <>
+                  <button onClick={() => scrollTo('services')} className="block px-3 py-2 text-base font-medium uppercase hover:text-[#D4AF37]">Serviços</button>
+                  <button onClick={() => scrollTo('combos')} className="block px-3 py-2 text-base font-medium uppercase hover:text-[#D4AF37]">Combos</button>
+                  <button onClick={() => scrollTo('plans')} className="block px-3 py-2 text-base font-medium uppercase hover:text-[#D4AF37]">Planos</button>
+                  <button onClick={() => scrollTo('booking')} className="block px-3 py-2 text-base font-medium text-[#D4AF37] uppercase font-bold">Agendar Agora</button>
+                  <button onClick={() => { setView('admin'); setIsMenuOpen(false); }} className="block px-3 py-2 text-base font-medium text-gray-500 uppercase">Acesso Admin</button>
+                </>
+              ) : (
+                 <button onClick={() => { setView('home'); setIsAdmin(false); setIsMenuOpen(false); }} className="block px-3 py-2 text-base font-medium uppercase hover:text-[#D4AF37]">Sair do Painel</button>
+              )}
+            </div>
+          </div>
+        )}
+      </nav>
+
+      {/* Main Content */}
+      <div className="pt-20">
+        {view === 'home' ? (
+          <HomePage 
+            services={services} 
+            bookings={bookings} 
+            openWhatsApp={openWhatsApp} 
+            scrollTo={scrollTo}
+            user={user}
+          />
+        ) : (
+          <AdminPage 
+            bookings={bookings} 
+            services={services}
+            isAdmin={isAdmin} 
+            setIsAdmin={setIsAdmin} 
+            user={user}
+          />
+        )}
+      </div>
+
+      {/* Footer */}
+      <footer className="bg-black py-12 border-t border-[#D4AF37]/10 text-center">
+        <h2 className="text-2xl font-bold tracking-widest text-white uppercase mb-4">
+          GUH <span className="text-[#D4AF37]">BARBER</span>
+        </h2>
+        <p className="text-gray-400 italic">"Seu estilo, nossa assinatura."</p>
+        <p className="mt-8 text-sm text-gray-600">© 2026 GUH BARBER. Todos os direitos reservados.</p>
+      </footer>
+    </div>
+  );
+}
+
+// ==========================================
+// HOME PAGE COMPONENTS
+// ==========================================
+
+function HomePage({ services, bookings, openWhatsApp, scrollTo, user }) {
+  const individualServices = services.filter(s => s.type === 'service');
+  const comboServices = services.filter(s => s.type === 'combo');
+
+  return (
+    <div>
+      {/* Hero Section */}
+      <section id="home" className="relative h-[80vh] flex items-center justify-center overflow-hidden">
+        <div className="absolute inset-0 z-0">
+          <img 
+            src="https://images.unsplash.com/photo-1585747860715-2ba37e788b70?q=80&w=2074&auto=format&fit=crop" 
+            alt="Barbershop Background" 
+            className="w-full h-full object-cover opacity-30"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/80 to-[#0a0a0a]"></div>
+        </div>
+        
+        <div className="relative z-10 text-center px-4 max-w-4xl mx-auto flex flex-col items-center">
+          <Scissors size={48} className="text-[#D4AF37] mb-6 animate-pulse" />
+          <h1 className="text-5xl md:text-7xl font-bold text-white mb-4 uppercase tracking-tighter">
+            GUH <span className="text-[#D4AF37]">BARBER</span>
+          </h1>
+          <p className="text-xl md:text-2xl text-gray-300 font-light italic mb-10">
+            Seu estilo, nossa assinatura.
+          </p>
+          <button 
+            onClick={() => scrollTo('booking')}
+            className="bg-[#D4AF37] text-black px-8 py-4 rounded-sm font-bold text-lg uppercase tracking-widest hover:bg-white hover:text-black transition-all duration-300 transform hover:scale-105 shadow-[0_0_20px_rgba(212,175,55,0.3)]"
+          >
+            Agende seu Horário
+          </button>
+        </div>
+      </section>
+
+      {/* Services Section */}
+      <section id="services" className="py-20 px-4 max-w-6xl mx-auto">
+        <SectionHeader title="Nossos Serviços" subtitle="Cortes precisos para o homem moderno" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-12">
+          {individualServices.map(service => (
+            <ServiceCard key={service.id} item={service} />
+          ))}
+        </div>
+      </section>
+
+      {/* Combos Section */}
+      <section id="combos" className="py-20 px-4 max-w-6xl mx-auto bg-[#111] rounded-3xl my-10 border border-[#D4AF37]/10">
+        <SectionHeader title="Combos Especiais" subtitle="A experiência completa com o melhor custo-benefício" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-12">
+          {comboServices.map(combo => (
+            <ServiceCard key={combo.id} item={combo} isCombo />
+          ))}
+        </div>
+      </section>
+
+      {/* Plans Section */}
+      <section id="plans" className="py-20 px-4 max-w-7xl mx-auto">
+        <SectionHeader title="Planos Mensais" subtitle="Mantenha o visual impecável o mês todo. (Até 4 atendimentos/mês)" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mt-12">
+          {PLANS.map(plan => (
+            <div 
+              key={plan.id} 
+              className={`relative bg-[#111] p-8 rounded-xl border flex flex-col h-full ${plan.highlight ? 'border-[#D4AF37] shadow-[0_0_30px_rgba(212,175,55,0.15)] transform md:-translate-y-4' : 'border-gray-800'}`}
+            >
+              {plan.highlight && (
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#D4AF37] text-black text-xs font-bold uppercase tracking-widest py-1 px-4 rounded-full">
+                  Mais Escolhido
+                </div>
+              )}
+              <h3 className="text-xl font-bold text-white uppercase mb-2 text-center">{plan.name}</h3>
+              <p className="text-center text-3xl font-bold text-[#D4AF37] my-4">R$ {plan.price.toFixed(2)}<span className="text-sm text-gray-500 font-normal">/mês</span></p>
+              <div className="text-gray-400 text-center mb-8 flex-grow flex items-center justify-center">
+                {plan.desc}
+              </div>
+              <a 
+                href={`https://api.whatsapp.com/send?phone=5511977591352&text=${encodeURIComponent('Olá, gostaria de assinar o ' + plan.name)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`w-full py-3 rounded-sm font-bold uppercase tracking-wide transition-all text-center block ${plan.highlight ? 'bg-[#D4AF37] text-black hover:bg-white' : 'bg-transparent border border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37] hover:text-black'}`}
+              >
+                Quero Meu Plano
+              </a>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Booking System */}
+      <section id="booking" className="py-20 px-4 max-w-4xl mx-auto">
+        <SectionHeader title="Agendamento Online" subtitle="Reserve seu horário em poucos passos" />
+        <div className="bg-[#111] border border-[#D4AF37]/20 p-6 md:p-10 rounded-2xl mt-12 shadow-2xl">
+          <BookingWizard services={services} bookings={bookings} openWhatsApp={openWhatsApp} user={user} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SectionHeader({ title, subtitle }) {
+  return (
+    <div className="text-center">
+      <h2 className="text-3xl md:text-4xl font-bold text-white uppercase tracking-wider mb-4">{title}</h2>
+      <div className="w-20 h-1 bg-[#D4AF37] mx-auto mb-4"></div>
+      <p className="text-gray-400 text-lg max-w-2xl mx-auto">{subtitle}</p>
+    </div>
+  );
+}
+
+function ServiceCard({ item, isCombo = false }) {
+  return (
+    <div className={`p-6 rounded-xl border flex flex-col justify-between transition-all hover:-translate-y-1 ${isCombo ? 'bg-[#1a1a1a] border-[#D4AF37]/30' : 'bg-black border-gray-800 hover:border-[#D4AF37]/50'}`}>
+      <div>
+        <div className="flex justify-between items-start mb-4">
+          <h3 className="text-lg font-bold text-white uppercase pr-4">{item.name}</h3>
+          {isCombo && <Star size={20} className="text-[#D4AF37] flex-shrink-0" />}
+        </div>
+      </div>
+      <div className="mt-4 pt-4 border-t border-gray-800/50 flex justify-between items-end">
+        <span className="text-sm text-gray-500 uppercase tracking-widest">Valor</span>
+        <span className="text-2xl font-bold text-[#D4AF37]">R$ {item.price.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// BOOKING WIZARD
+// ==========================================
+
+function BookingWizard({ services, bookings, openWhatsApp, user }) {
+  const [step, setStep] = useState(1);
+  const [formData, setFormData] = useState({
+    serviceId: '',
+    serviceName: '',
+    price: 0,
+    date: '',
+    time: '',
+    customerName: '',
+    customerPhone: ''
+  });
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  // Get available times for selected date
+  const availableTimes = useMemo(() => {
+    if (!formData.date) return [];
+    
+    // Filter bookings for the selected date that are not cancelled
+    const bookedForDate = bookings.filter(b => b.date === formData.date && b.status !== 'cancelled');
+    const bookedTimes = bookedForDate.map(b => b.time);
+    
+    return TIME_SLOTS.map(time => ({
+      time,
+      available: !bookedTimes.includes(time)
+    }));
+  }, [formData.date, bookings]);
+
+  const handleNext = () => {
+    setError('');
+    if (step === 1 && !formData.serviceId) {
+      setError('Por favor, selecione um serviço.'); return;
+    }
+    if (step === 2) {
+      if (!formData.date) {
+        setError('Por favor, escolha uma data.'); return;
+      }
+      const day = new Date(formData.date + 'T12:00:00').getDay();
+      if (day === 0 || day === 1) { // 0: Sun, 1: Mon
+        setError('Estamos fechados aos domingos e segundas-feiras. Escolha outra data.');
+        return;
+      }
+    }
+    if (step === 3 && !formData.time) {
+      setError('Por favor, escolha um horário.'); return;
+    }
+    setStep(s => s + 1);
+  };
+
+  const submitBooking = async () => {
+    if (!formData.customerName || !formData.customerPhone) {
+      setError('Preencha todos os dados.'); return;
+    }
+    if (!user) {
+      setError('Erro de conexão. Tente atualizar a página.'); return;
+    }
+
+    setIsSubmitting(true);
+    setError('');
+    try {
+      const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
+      await addDoc(bookingsRef, {
+        serviceId: formData.serviceId,
+        serviceName: formData.serviceName,
+        price: formData.price,
+        date: formData.date,
+        time: formData.time,
+        customerName: formData.customerName,
+        customerPhone: formData.customerPhone,
+        status: 'confirmed',
+        createdAt: new Date().toISOString()
+      });
+      setSuccess(true);
+    } catch (err) {
+      console.error(err);
+      setError('Erro ao salvar agendamento. Tente novamente.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (success) {
+    return (
+      <div className="text-center py-10">
+        <CheckCircle size={64} className="text-[#D4AF37] mx-auto mb-6" />
+        <h3 className="text-3xl font-bold text-white mb-4 uppercase">Agendado com Sucesso!</h3>
+        <p className="text-gray-400 mb-8 text-lg">
+          {formData.customerName}, seu horário para {formData.serviceName} está confirmado para o dia {formData.date.split('-').reverse().join('/')} às {formData.time}.
+        </p>
+        <a 
+          href={`https://api.whatsapp.com/send?phone=5511977591352&text=${encodeURIComponent(`Olá, agendei um horário pelo site!\nNome: ${formData.customerName}\nServiço: ${formData.serviceName}\nData: ${formData.date.split('-').reverse().join('/')} às ${formData.time}`)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="bg-[#25D366] text-white px-8 py-4 rounded-sm font-bold uppercase tracking-widest hover:bg-[#1ebe5d] transition-all flex items-center justify-center mx-auto space-x-2 w-max"
+        >
+          <Phone size={20} /> <span>Avisar no WhatsApp</span>
+        </a>
+        <button onClick={() => { setSuccess(false); setStep(1); setFormData({...formData, date:'', time:''}); }} className="mt-6 text-[#D4AF37] underline">
+          Fazer outro agendamento
+        </button>
+      </div>
+    );
+  }
+
+  // Calculate min date (today)
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  return (
+    <div>
+      {/* Progress */}
+      <div className="flex justify-between items-center mb-10 relative">
+        <div className="absolute left-0 top-1/2 w-full h-1 bg-gray-800 -z-10 -translate-y-1/2 rounded-full"></div>
+        {[1, 2, 3, 4].map(num => (
+          <div key={num} className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-colors ${step >= num ? 'bg-[#D4AF37] text-black shadow-[0_0_10px_rgba(212,175,55,0.5)]' : 'bg-black text-gray-500 border border-gray-700'}`}>
+            {step > num ? <Check size={16} /> : num}
+          </div>
+        ))}
+      </div>
+
+      {error && <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded-md mb-6">{error}</div>}
+
+      {/* Step 1: Service */}
+      {step === 1 && (
+        <div className="animate-fade-in">
+          <h3 className="text-xl font-bold text-white mb-6 uppercase flex items-center"><Scissors className="mr-3 text-[#D4AF37]" /> Escolha o Serviço</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+            {services.map(service => (
+              <div 
+                key={service.id}
+                onClick={() => setFormData({...formData, serviceId: service.id, serviceName: service.name, price: service.price})}
+                className={`p-4 rounded-lg cursor-pointer border transition-all ${formData.serviceId === service.id ? 'bg-[#D4AF37]/10 border-[#D4AF37]' : 'bg-black border-gray-800 hover:border-gray-600'}`}
+              >
+                <div className="font-bold text-white uppercase text-sm">{service.name}</div>
+                <div className="text-[#D4AF37] font-semibold mt-1">R$ {service.price.toFixed(2)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Step 2: Date */}
+      {step === 2 && (
+        <div className="animate-fade-in">
+          <h3 className="text-xl font-bold text-white mb-6 uppercase flex items-center"><Calendar className="mr-3 text-[#D4AF37]" /> Escolha a Data</h3>
+          <p className="text-gray-400 mb-6 text-sm">Funcionamento de Terça a Sábado, das 09h às 19h.</p>
+          <input 
+            type="date" 
+            min={todayStr}
+            value={formData.date}
+            onChange={(e) => setFormData({...formData, date: e.target.value, time: ''})} // Reset time on date change
+            className="w-full bg-black border border-gray-700 rounded-md p-4 text-white text-lg focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] outline-none transition-all color-scheme-dark"
+          />
+        </div>
+      )}
+
+      {/* Step 3: Time */}
+      {step === 3 && (
+        <div className="animate-fade-in">
+          <h3 className="text-xl font-bold text-white mb-6 uppercase flex items-center"><Clock className="mr-3 text-[#D4AF37]" /> Escolha o Horário</h3>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+            {availableTimes.map(({ time, available }) => (
+              <button
+                key={time}
+                disabled={!available}
+                onClick={() => setFormData({...formData, time})}
+                className={`py-3 rounded-md font-medium text-sm transition-all ${
+                  !available 
+                    ? 'bg-gray-900 text-gray-700 cursor-not-allowed border border-gray-800' 
+                    : formData.time === time 
+                      ? 'bg-[#D4AF37] text-black border border-[#D4AF37] shadow-[0_0_10px_rgba(212,175,55,0.4)]' 
+                      : 'bg-black text-gray-300 border border-gray-700 hover:border-[#D4AF37] hover:text-[#D4AF37]'
+                }`}
+              >
+                {time}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Step 4: User Info */}
+      {step === 4 && (
+        <div className="animate-fade-in">
+          <h3 className="text-xl font-bold text-white mb-6 uppercase flex items-center"><User className="mr-3 text-[#D4AF37]" /> Seus Dados</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-gray-400 text-sm mb-2 uppercase">Nome Completo</label>
+              <input 
+                type="text" 
+                placeholder="Ex: João Silva"
+                value={formData.customerName}
+                onChange={(e) => setFormData({...formData, customerName: e.target.value})}
+                className="w-full bg-black border border-gray-700 rounded-md p-4 text-white focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-400 text-sm mb-2 uppercase">WhatsApp (com DDD)</label>
+              <input 
+                type="tel" 
+                placeholder="Ex: 11 99999-9999"
+                value={formData.customerPhone}
+                onChange={(e) => setFormData({...formData, customerPhone: e.target.value})}
+                className="w-full bg-black border border-gray-700 rounded-md p-4 text-white focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] outline-none"
+              />
+            </div>
+            
+            <div className="bg-[#1a1a1a] p-4 rounded-md border border-gray-800 mt-6">
+              <h4 className="text-[#D4AF37] font-bold uppercase mb-2 text-sm">Resumo da Reserva</h4>
+              <div className="flex justify-between text-sm mb-1"><span className="text-gray-400">Serviço:</span> <span className="text-white">{formData.serviceName}</span></div>
+              <div className="flex justify-between text-sm mb-1"><span className="text-gray-400">Data:</span> <span className="text-white">{formData.date.split('-').reverse().join('/')}</span></div>
+              <div className="flex justify-between text-sm mb-1"><span className="text-gray-400">Hora:</span> <span className="text-white">{formData.time}</span></div>
+              <div className="flex justify-between text-sm font-bold mt-3 pt-3 border-t border-gray-700"><span className="text-white uppercase">Total:</span> <span className="text-[#D4AF37]">R$ {formData.price.toFixed(2)}</span></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Navigation Buttons */}
+      <div className="flex justify-between mt-10">
+        {step > 1 ? (
+          <button onClick={() => setStep(s => s - 1)} className="px-6 py-3 border border-gray-600 text-gray-300 rounded-sm font-bold uppercase hover:bg-gray-800 transition-colors">
+            Voltar
+          </button>
+        ) : <div></div>}
+        
+        {step < 4 ? (
+          <button onClick={handleNext} className="px-8 py-3 bg-[#D4AF37] text-black rounded-sm font-bold uppercase tracking-wide hover:bg-white transition-colors">
+            Avançar
+          </button>
+        ) : (
+          <button onClick={submitBooking} disabled={isSubmitting} className="px-8 py-3 bg-[#D4AF37] text-black rounded-sm font-bold uppercase tracking-wide hover:bg-white transition-colors disabled:opacity-50">
+            {isSubmitting ? 'Confirmando...' : 'Confirmar Reserva'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// ADMIN PANEL
+// ==========================================
+
+function AdminPage({ bookings, services, isAdmin, setIsAdmin, user }) {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (pin === ADMIN_PIN) {
+      setIsAdmin(true);
+      setError('');
+    } else {
+      setError('PIN Incorreto.');
+    }
+  };
+
+  const handleCancelBooking = async (id) => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', id);
+      await updateDoc(docRef, { status: 'cancelled' });
+    } catch (err) {
+      console.error(err);
+      setError('Erro ao cancelar.');
+    }
+  };
+  
+  const handleDeleteBooking = async (id) => {
+      if (!user) return;
+      try {
+        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', id);
+        await deleteDoc(docRef);
+      } catch (err) {
+        console.error(err);
+        setError('Erro ao deletar.');
+      }
+    };
+
+  if (!isAdmin) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center px-4">
+        <div className="bg-[#111] p-8 rounded-xl border border-gray-800 max-w-md w-full text-center">
+          <User size={48} className="text-[#D4AF37] mx-auto mb-6" />
+          <h2 className="text-2xl font-bold text-white uppercase mb-2">Acesso Restrito</h2>
+          <p className="text-gray-400 mb-8 text-sm">Insira o PIN administrativo para gerenciar a barbearia.</p>
+          
+          <form onSubmit={handleLogin}>
+            <input 
+              type="password" 
+              placeholder="PIN"
+              value={pin}
+              onChange={e => setPin(e.target.value)}
+              className="w-full bg-black border border-gray-700 rounded-md p-4 text-center text-white text-xl tracking-widest focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] outline-none mb-4"
+            />
+            {error && <p className="text-red-500 mb-4 text-sm">{error}</p>}
+            <button type="submit" className="w-full bg-[#D4AF37] text-black py-4 rounded-sm font-bold uppercase tracking-widest hover:bg-white transition-all">
+              Entrar
+            </button>
+            <p className="text-xs text-gray-600 mt-6">(Dica: O PIN é GUH2024)</p>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // Filter bookings for the selected admin date
+  const todaysBookings = bookings
+    .filter(b => b.date === selectedDate)
+    .sort((a, b) => a.time.localeCompare(b.time));
+
+  return (
+    <div className="px-4 py-10 max-w-6xl mx-auto">
+      <div className="flex flex-col md:flex-row justify-between items-center mb-10">
+        <div>
+          <h2 className="text-3xl font-bold text-white uppercase mb-2 text-[#D4AF37]">Painel de Controle</h2>
+          <p className="text-gray-400">Gerencie seus agendamentos e horários.</p>
+        </div>
+        <div className="mt-4 md:mt-0 flex space-x-4 items-center">
+          <label className="text-gray-400 uppercase text-sm font-bold">Data:</label>
+          <input 
+            type="date" 
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+            className="bg-[#111] border border-gray-700 rounded-md p-2 text-white focus:border-[#D4AF37] outline-none color-scheme-dark"
+          />
+        </div>
+      </div>
+
+      <div className="bg-[#111] border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
+        <div className="p-6 border-b border-gray-800 bg-[#1a1a1a]">
+          <h3 className="text-xl font-bold text-white uppercase flex items-center">
+            <Calendar className="mr-2 text-[#D4AF37]"/> Agendamentos ({selectedDate.split('-').reverse().join('/')})
+          </h3>
+        </div>
+        
+        <div className="p-6">
+          {todaysBookings.length === 0 ? (
+            <div className="text-center py-10 text-gray-500">
+              Nenhum agendamento para esta data.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-gray-300">
+                <thead className="uppercase text-xs font-bold text-gray-500 border-b border-gray-800">
+                  <tr>
+                    <th className="pb-3 px-4">Hora</th>
+                    <th className="pb-3 px-4">Cliente</th>
+                    <th className="pb-3 px-4">Contato</th>
+                    <th className="pb-3 px-4">Serviço</th>
+                    <th className="pb-3 px-4">Status</th>
+                    <th className="pb-3 px-4 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todaysBookings.map((b) => (
+                    <tr key={b.id} className="border-b border-gray-800/50 hover:bg-[#1a1a1a] transition-colors">
+                      <td className="py-4 px-4 font-bold text-[#D4AF37]">{b.time}</td>
+                      <td className="py-4 px-4 font-medium text-white">{b.customerName}</td>
+                      <td className="py-4 px-4">{b.customerPhone}</td>
+                      <td className="py-4 px-4">{b.serviceName}</td>
+                      <td className="py-4 px-4">
+                        <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase ${b.status === 'cancelled' ? 'bg-red-900/50 text-red-500' : 'bg-green-900/50 text-green-500'}`}>
+                          {b.status === 'cancelled' ? 'Cancelado' : 'Confirmado'}
+                        </span>
+                      </td>
+                      <td className="py-4 px-4 text-right">
+                        {b.status !== 'cancelled' ? (
+                          <button 
+                            onClick={() => handleCancelBooking(b.id)}
+                            className="text-xs bg-red-900/30 text-red-400 px-3 py-1 rounded uppercase hover:bg-red-900/80 transition-colors"
+                          >
+                            Cancelar
+                          </button>
+                        ) : (
+                           <button 
+                            onClick={() => handleDeleteBooking(b.id)}
+                            className="text-xs bg-gray-800 text-gray-400 p-2 rounded hover:bg-red-900/80 hover:text-red-400 transition-colors"
+                            title="Apagar permanentemente"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Global CSS to handle custom scrollbars and calendar dark mode
+const style = document.createElement('style');
+style.textContent = `
+  .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
+  
+  .color-scheme-dark { color-scheme: dark; }
+  
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+`;
+document.head.appendChild(style);
